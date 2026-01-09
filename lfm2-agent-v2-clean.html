@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LFM2 Agent - Transformers.js + WebGPU</title>
+  <style>
+    :root {
+      --bg-primary: #030306; --bg-secondary: #0a0a10; --bg-tertiary: #111118; --bg-card: #18181f;
+      --accent: #22d3ee; --accent-secondary: #a855f7; --text-primary: #f4f4f5; --text-secondary: #a1a1aa;
+      --text-muted: #71717a; --success: #22c55e; --warning: #eab308; --error: #ef4444; --border: rgba(255,255,255,0.06);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; background: var(--bg-primary); color: var(--text-primary); min-height: 100vh; overflow: hidden; }
+    .app-container { display: grid; grid-template-columns: 280px 1fr; height: 100vh; }
+    .sidebar { background: var(--bg-secondary); border-right: 1px solid var(--border); padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
+    .logo { display: flex; align-items: center; gap: 10px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+    .logo-icon { width: 40px; height: 40px; background: linear-gradient(135deg, var(--accent), var(--accent-secondary)); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 20px; }
+    .logo-title { font-weight: 600; font-size: 18px; color: var(--accent); }
+    .logo-subtitle { font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
+    .section { background: var(--bg-tertiary); border-radius: 12px; padding: 14px; border: 1px solid var(--border); }
+    .section-title { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--accent); margin-bottom: 10px; font-weight: 600; }
+    .status-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 12px; border-bottom: 1px solid var(--border); }
+    .status-item:last-child { border-bottom: none; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
+    .status-dot.loading { background: var(--warning); animation: pulse 1s infinite; }
+    .status-dot.ready { background: var(--success); }
+    .status-dot.error { background: var(--error); }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .progress-bar { height: 4px; background: var(--bg-primary); border-radius: 2px; margin-top: 10px; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-secondary)); border-radius: 2px; width: 0%; transition: width 0.3s; }
+    .progress-text { font-size: 10px; color: var(--text-muted); margin-top: 6px; font-family: monospace; }
+    .model-selector { width: 100%; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary); font-size: 12px; cursor: pointer; margin-top: 10px; }
+    .model-selector:focus { outline: none; border-color: var(--accent); }
+    .backend-badge { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-primary); padding: 5px 10px; border-radius: 16px; font-size: 10px; color: var(--accent); border: 1px solid rgba(34,211,238,0.2); margin-top: 10px; }
+    .tool-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+    .tool-tag { display: flex; align-items: center; justify-content: center; background: var(--bg-primary); padding: 8px; border-radius: 8px; font-size: 10px; color: var(--text-secondary); border: 1px solid var(--border); }
+    .main-area { display: flex; flex-direction: column; height: 100vh; }
+    .chat-header { padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); display: flex; align-items: center; justify-content: space-between; }
+    .chat-header h1 { font-size: 18px; font-weight: 500; color: var(--accent); }
+    .chat-header p { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+    .header-badges { display: flex; gap: 8px; }
+    .header-badge { display: flex; align-items: center; gap: 6px; background: var(--bg-tertiary); padding: 6px 10px; border-radius: 16px; font-size: 11px; border: 1px solid var(--border); color: var(--text-secondary); }
+    .clear-chat-btn { background: var(--bg-tertiary); padding: 6px 12px; border-radius: 16px; font-size: 11px; border: 1px solid var(--border); color: var(--text-secondary); cursor: pointer; font-family: inherit; }
+    .clear-chat-btn:hover { border-color: var(--error); color: var(--error); }
+    .chat-messages { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; }
+    .message { max-width: 80%; }
+    .message.user { align-self: flex-end; }
+    .message.assistant { align-self: flex-start; }
+    .message-content { padding: 12px 16px; border-radius: 16px; font-size: 14px; line-height: 1.6; }
+    .message.user .message-content { background: linear-gradient(135deg, var(--accent), var(--accent-secondary)); color: white; border-bottom-right-radius: 4px; }
+    .message.assistant .message-content { background: var(--bg-card); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+    .message-meta { font-size: 10px; color: var(--text-muted); margin-top: 6px; padding: 0 4px; font-family: monospace; display: flex; gap: 8px; }
+    .message-meta .speed { color: var(--accent); }
+    .tool-execution { background: var(--bg-tertiary); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; padding: 12px; margin: 8px 0; font-family: monospace; font-size: 11px; }
+    .tool-execution-header { display: flex; align-items: center; gap: 8px; color: var(--accent); margin-bottom: 8px; font-weight: 500; }
+    .tool-execution-body { color: var(--text-secondary); white-space: pre-wrap; background: var(--bg-primary); padding: 10px; border-radius: 6px; }
+    .tool-result { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); color: var(--success); }
+    .thinking-indicator { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; }
+    .thinking-wave { display: flex; gap: 3px; }
+    .thinking-wave span { width: 4px; height: 16px; background: var(--accent); border-radius: 2px; animation: wave 1s infinite; }
+    .thinking-wave span:nth-child(2) { animation-delay: 0.1s; }
+    .thinking-wave span:nth-child(3) { animation-delay: 0.2s; }
+    .thinking-wave span:nth-child(4) { animation-delay: 0.3s; }
+    @keyframes wave { 0%, 100% { transform: scaleY(0.4); } 50% { transform: scaleY(1); } }
+    .input-area { padding: 16px 24px; background: var(--bg-secondary); border-top: 1px solid var(--border); }
+    .input-container { display: flex; gap: 12px; align-items: flex-end; }
+    .input-wrapper { flex: 1; background: var(--bg-tertiary); border-radius: 14px; border: 1px solid var(--border); }
+    .input-wrapper:focus-within { border-color: var(--accent); }
+    #user-input { width: 100%; padding: 14px 16px; background: transparent; border: none; color: var(--text-primary); font-family: inherit; font-size: 14px; resize: none; outline: none; min-height: 48px; max-height: 120px; }
+    #user-input::placeholder { color: var(--text-muted); }
+    #send-btn { width: 48px; height: 48px; background: linear-gradient(135deg, var(--accent), var(--accent-secondary)); border: none; border-radius: 14px; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    #send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    #send-btn svg { width: 20px; height: 20px; }
+    .welcome-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; text-align: center; padding: 40px; }
+    .welcome-icon { width: 80px; height: 80px; background: linear-gradient(135deg, var(--accent), var(--accent-secondary)); border-radius: 24px; display: flex; align-items: center; justify-content: center; font-size: 40px; margin-bottom: 24px; }
+    .welcome-screen h2 { font-size: 28px; font-weight: 600; margin-bottom: 12px; color: var(--accent); }
+    .welcome-screen p { color: var(--text-secondary); max-width: 480px; line-height: 1.6; font-size: 14px; }
+    .welcome-screen .highlight { color: var(--accent); font-weight: 500; }
+    .example-prompts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 32px; justify-content: center; }
+    .example-prompt { background: var(--bg-card); border: 1px solid var(--border); padding: 10px 16px; border-radius: 20px; font-size: 12px; cursor: pointer; color: var(--text-secondary); }
+    .example-prompt:hover { border-color: var(--accent); color: var(--accent); }
+    pre, code { font-family: monospace; background: var(--bg-primary); border-radius: 6px; padding: 2px 6px; font-size: 12px; }
+    pre { padding: 12px; overflow-x: auto; margin: 10px 0; }
+    @media (max-width: 768px) {
+      .app-container { grid-template-columns: 1fr; }
+      .sidebar, .header-badges { display: none; }
+      .chat-messages, .input-area { padding: 16px; }
+      .message { max-width: 90%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-container">
+    <aside class="sidebar">
+      <div class="logo">
+        <div class="logo-icon">🌊</div>
+        <div>
+          <div class="logo-title">LFM2 Agent</div>
+          <div class="logo-subtitle">Transformers.js</div>
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-title">Estado</div>
+        <div class="status-item"><span class="status-dot" id="model-status"></span><span id="model-status-text">Modelo: Esperando...</span></div>
+        <div class="status-item"><span class="status-dot" id="webgpu-status"></span><span id="webgpu-status-text">WebGPU: Verificando...</span></div>
+        <div class="status-item"><span class="status-dot" id="rag-status"></span><span id="rag-status-text">RAG: Esperando...</span></div>
+        <div class="status-item"><span class="status-dot ready" id="memory-status"></span><span id="memory-status-text">Memoria: 0 turnos</span></div>
+        <select class="model-selector" id="model-selector">
+          <option value="onnx-community/LFM2-1.2B-Tool-ONNX" selected>LFM2 1.2B Tool</option>
+          <option value="onnx-community/LFM2-1.2B-ONNX">LFM2 1.2B General</option>
+          <option value="onnx-community/LFM2-700M-ONNX">LFM2 700M</option>
+        </select>
+        <div class="backend-badge"><span id="backend-text">Detectando...</span></div>
+        <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+        <div class="progress-text" id="progress-text"></div>
+      </div>
+      <div class="section">
+        <div class="section-title">Tools</div>
+        <div class="tool-grid">
+          <div class="tool-tag">search_profile</div>
+          <div class="tool-tag">calculator</div>
+          <div class="tool-tag">get_current_date</div>
+          <div class="tool-tag">get_weather</div>
+        </div>
+      </div>
+    </aside>
+    <main class="main-area">
+      <header class="chat-header">
+        <div>
+          <h1>Agente Personal con LFM2</h1>
+          <p>Liquid AI + EmbeddingGemma + WebGPU • 100% Local</p>
+        </div>
+        <div class="header-badges">
+          <button class="clear-chat-btn" id="clear-chat-btn">🗑️ Nueva</button>
+          <button class="clear-chat-btn" id="view-summary-btn" style="display:none">📝 Resumen</button>
+          <div class="header-badge" id="inference-badge">⚡ WebGPU</div>
+        </div>
+      </header>
+      <div class="chat-messages" id="chat-messages">
+        <div class="welcome-screen" id="welcome-screen">
+          <div class="welcome-icon">🌊</div>
+          <h2>LFM2 Agent</h2>
+          <p><span class="highlight">LFM2-1.2B-Tool</span> con <span class="highlight">Transformers.js</span> y <span class="highlight">WebGPU</span>. RAG con <span class="highlight">EmbeddingGemma</span>. 100% local.</p>
+          <div class="example-prompts">
+            <div class="example-prompt" onclick="useExample(this)">¿Cuál es mi experiencia en ML?</div>
+            <div class="example-prompt" onclick="useExample(this)">¿Qué fecha y hora es?</div>
+            <div class="example-prompt" onclick="useExample(this)">Calcula 18% de 4500</div>
+            <div class="example-prompt" onclick="useExample(this)">¿En qué proyectos he trabajado?</div>
+          </div>
+        </div>
+      </div>
+      <div class="input-area">
+        <div class="input-container">
+          <div class="input-wrapper">
+            <textarea id="user-input" placeholder="Escribe tu mensaje..." rows="1" disabled></textarea>
+          </div>
+          <button id="send-btn" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+          </button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { AutoModelForCausalLM, AutoTokenizer, TextStreamer, pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1';
+    env.allowLocalModels = false;
+    env.useBrowserCache = true;
+
+    const PERSONAL_KNOWLEDGE_BASE = [
+      { id: "profile", content: `Nombre: [Tu Nombre]\nRol: ML Engineer / Data Scientist\nUbicación: Colombia\nEmail: tu@email.com` },
+      { id: "experience", content: `Experiencia: 5+ años en ML y Data Science. Especializado en NLP, Computer Vision. Liderando equipos de ML en producción.` },
+      { id: "skills", content: `Stack: Python, JavaScript, PyTorch, TensorFlow, Hugging Face, Docker, AWS, GCP, FastAPI, React` },
+      { id: "projects", content: `Proyectos: Credit scoring ML, Voice Agent con LLMs, Detección de fraude, Pipeline NLP, Sistema de recomendación` },
+      { id: "education", content: `Educación: Maestría en IA/Data Science. AWS ML Specialty, Google Cloud ML Engineer.` },
+      { id: "interests", content: `Intereses: LLMs, AI Agents, Efficient ML, Edge ML, Open source` }
+    ];
+
+    class EmbeddingVectorStore {
+      constructor() { 
+        this.documents = []; 
+        this.embeddings = []; 
+        this.embedder = null; 
+        this.isReady = false; 
+      }
+      
+      async initialize(cb) {
+        cb({ text: 'Cargando EmbeddingGemma...' });
+        this.embedder = await pipeline('feature-extraction', 'onnx-community/embeddinggemma-300m-ONNX', {
+          dtype: 'q4',
+          progress_callback: (p) => { 
+            if (p.status === 'downloading' && p.total) 
+              cb({ text: `EmbeddingGemma: ${Math.round(p.loaded/p.total*100)}%`, progress: p.loaded/p.total }); 
+          }
+        });
+        this.isReady = true;
+        cb({ text: 'EmbeddingGemma listo', progress: 1 });
+      }
+      
+      async embed(text) { 
+        const out = await this.embedder(text, { pooling: 'mean', normalize: true }); 
+        return Array.from(out.data); 
+      }
+      
+      async addDocuments(docs, cb) {
+        this.documents = docs;
+        for (let i = 0; i < docs.length; i++) {
+          cb({ text: `Indexando ${i+1}/${docs.length}...`, progress: (i+1)/docs.length });
+          this.embeddings.push(await this.embed(docs[i].content));
+        }
+      }
+      
+      cosineSim(a, b) { 
+        let dot = 0, normA = 0, normB = 0; 
+        for (let i = 0; i < a.length; i++) {
+          dot += a[i] * b[i];
+          normA += a[i] * a[i];
+          normB += b[i] * b[i];
+        } 
+        return dot / (Math.sqrt(normA) * Math.sqrt(normB)); 
+      }
+      
+      async search(query, k = 3) {
+        if (!this.isReady) return [];
+        const queryEmb = await this.embed(query);
+        return this.documents
+          .map((doc, i) => ({ ...doc, score: this.cosineSim(queryEmb, this.embeddings[i]) }))
+          .filter(r => r.score > 0.3)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, k);
+      }
+    }
+
+    const vectorStore = new EmbeddingVectorStore();
+    const TOOLS = [
+      { name: "search_profile", description: "Searches the user's personal profile and knowledge base to find information about their experience, skills, projects, education, and professional background. Use this when the user asks about themselves or their qualifications.", parameters: { type: "object", properties: { query: { type: "string", description: "The search query to find relevant information in the user's profile" } }, required: ["query"] } },
+      { name: "calculator", description: "Performs mathematical calculations including arithmetic operations, percentages, and numeric expressions. Use this for any math computation the user requests.", parameters: { type: "object", properties: { expression: { type: "string", description: "The mathematical expression to evaluate (e.g., '15% of 200', '45 * 12', '(100 + 50) / 3')" } }, required: ["expression"] } },
+      { name: "get_current_date", description: "Returns the current date and time in the user's locale. Use this when the user asks what day, date, or time it is.", parameters: { type: "object", properties: {} } },
+      { name: "get_weather", description: "Retrieves the current weather conditions for a specified city including temperature and weather description.", parameters: { type: "object", properties: { city: { type: "string", description: "The name of the city to get weather information for" } }, required: ["city"] } }
+    ];
+
+    const toolExecutors = {
+      search_profile: async (args) => { 
+        const query = args.query || Object.values(args)[0] || '';
+        const results = await vectorStore.search(query, 2); 
+        return results.length ? results.map(x => x.content).join("\n\n") : "No info found."; 
+      },
+      
+      calculator: (args) => { 
+        try { 
+          let expr = (args.expression || '')
+            .replace(/(\d+(?:\.\d+)?)\s*%\s*(?:de|of)\s*(\d+(?:\.\d+)?)/gi, '($1/100)*$2')
+            .replace(/(\d+(?:\.\d+)?)\s*%/g, '($1/100)')
+            .replace(/[^0-9+\-*/().]/g, ''); 
+          return `${Function(`"use strict";return(${expr})`)()}`; 
+        } catch(e) { 
+          return `Error: ${e.message}`; 
+        } 
+      },
+      
+      get_current_date: () => { 
+        const now = new Date(); 
+        const date = now.toLocaleDateString('es-ES', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+        const time = now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+        return `${date}, ${time}`; 
+      },
+      
+      get_weather: (args) => { 
+        const city = args.city || 'Unknown';
+        const temp = [18, 22, 25, 28, 30][Math.floor(Math.random() * 5)];
+        const weather = ['soleado', 'nublado', 'lluvia'][Math.floor(Math.random() * 3)]; 
+        return `${city}: ${temp}°C, ${weather}`; 
+      }
+    };
+
+    class LFM2Agent {
+      constructor() { 
+        this.model = null; 
+        this.tokenizer = null; 
+        this.isReady = false; 
+        this.backend = 'wasm'; 
+        this.conversationHistory = []; 
+        this.maxContextTokens = 5000; 
+        this.tokensToPreserve = 1500; 
+        this.summaryMaxTokens = 400; 
+        this.conversationSummary = ''; 
+        this.isSummarizing = false; 
+        this.currentTokenCount = 0; 
+      }
+      
+      clearHistory() { 
+        this.conversationHistory = []; 
+        this.conversationSummary = ''; 
+        this.currentTokenCount = 0; 
+      }
+      
+      addToHistory(role, content) { 
+        this.conversationHistory.push({ role, content }); 
+        this.currentTokenCount = 0; 
+      }
+      
+      countTokens(text) { 
+        try { 
+          return this.tokenizer?.encode(text).length || Math.ceil(text.length / 4); 
+        } catch { 
+          return Math.ceil(text.length / 4); 
+        } 
+      }
+      
+      getHistoryTokenCount() { 
+        if (this.currentTokenCount > 0) return this.currentTokenCount; 
+        const historyText = this.conversationHistory.map(m => `${m.role}:${m.content}`).join('\n');
+        this.currentTokenCount = this.countTokens(historyText); 
+        return this.currentTokenCount; 
+      }
+      
+      shouldSummarize() { 
+        return !this.isSummarizing && this.getHistoryTokenCount() > this.maxContextTokens; 
+      }
+      
+      findPreserveIndex() { 
+        let tokenCount = 0; 
+        for (let i = this.conversationHistory.length - 1; i >= 0; i--) { 
+          tokenCount += this.countTokens(`${this.conversationHistory[i].role}:${this.conversationHistory[i].content}`); 
+          if (tokenCount > this.tokensToPreserve) return Math.max(0, i + 1); 
+        } 
+        return 0; 
+      }
+      async summarizeConversation(onStatus) {
+        if (!this.model || this.isSummarizing) return;
+        this.isSummarizing = true;
+        onStatus?.('Resumiendo...');
+        
+        try {
+          const preserveIndex = this.findPreserveIndex();
+          const toSummarize = this.conversationHistory.slice(0, preserveIndex);
+          if (toSummarize.length < 2) { 
+            this.isSummarizing = false; 
+            return; 
+          }
+          
+          const historyText = toSummarize
+            .map(m => `${m.role === 'user' ? 'Usuario' : 'Asistente'}: ${m.content}`)
+            .join('\n');
+          
+          const prompt = this.conversationSummary 
+            ? `Resumen actual:\n${this.conversationSummary}\n\nNuevos:\n${historyText}\n\nExtiende el resumen.` 
+            : `Conversación:\n${historyText}\n\nCrea resumen conciso.`;
+          
+          const msgs = [
+            { role: 'system', content: 'Crea resúmenes concisos.' },
+            { role: 'user', content: prompt }
+          ];
+          const input = this.tokenizer.apply_chat_template(msgs, { add_generation_prompt: true, return_dict: true });
+          
+          let summary = '';
+          await this.model.generate({
+            ...input,
+            max_new_tokens: this.summaryMaxTokens,
+            do_sample: false,
+            repetition_penalty: 1.05,
+            streamer: new TextStreamer(this.tokenizer, {
+              skip_prompt: true,
+              skip_special_tokens: true,
+              callback_function: t => { summary += t; }
+            })
+          });
+          
+          this.conversationSummary = summary.trim();
+          this.conversationHistory = this.conversationHistory.slice(preserveIndex);
+          this.currentTokenCount = 0;
+        } catch (e) { 
+          console.error('Summarization error:', e); 
+        }
+        this.isSummarizing = false;
+      }
+      async initialize(modelId, cb) {
+        let device = 'wasm';
+        if (navigator.gpu) { 
+          try { 
+            if (await navigator.gpu.requestAdapter()) { 
+              device = 'webgpu'; 
+              this.backend = 'webgpu'; 
+            } 
+          } catch {} 
+        }
+        
+        cb({ progress: 0.05, text: `Iniciando ${device.toUpperCase()}...` });
+        this.tokenizer = await AutoTokenizer.from_pretrained(modelId);
+        cb({ progress: 0.1, text: 'Tokenizer listo' });
+        
+        this.model = await AutoModelForCausalLM.from_pretrained(modelId, { 
+          dtype: 'q4', 
+          device, 
+          progress_callback: p => { 
+            if (p.status === 'downloading' && p.total) 
+              cb({ progress: 0.1 + p.loaded / p.total * 0.8, text: `Descargando: ${Math.round(p.loaded / p.total * 100)}%` }); 
+          } 
+        });
+        
+        cb({ progress: 1, text: 'Modelo listo' });
+        this.isReady = true;
+        return this.backend;
+      }
+      parseToolCall(text) {
+        // Patrón principal: <|tool_call_start|>[function_name(args)]<|tool_call_end|>
+        const mainPattern = /<\|tool_call_start\|>\s*\[(\w+)\(([^)]*)\)\]\s*<\|tool_call_end\|>/;
+        const mainMatch = text.match(mainPattern);
+        
+        if (mainMatch) {
+          const [, fnName, argsStr] = mainMatch;
+          if (toolExecutors[fnName]) {
+            const args = this.parseArgs(argsStr);
+            return { name: fnName, arguments: args };
+          }
+        }
+        
+        // Fallback: [function_name(args)] o function_name(args)
+        for (const pattern of [/\[(\w+)\(([^)]*)\)\]/, /(\w+)\(([^)]*)\)/]) {
+          const match = text.match(pattern);
+          if (match && match[1] && toolExecutors[match[1]]) {
+            const args = this.parseArgs(match[2]);
+            return { name: match[1], arguments: args };
+          }
+        }
+        return null;
+      }
+      
+      parseArgs(argsStr) {
+        const args = {};
+        if (argsStr && argsStr.trim()) {
+          // param="value" o param='value'
+          for (const match of argsStr.matchAll(/(\w+)\s*=\s*["']([^"']*)["']/g)) {
+            args[match[1]] = match[2];
+          }
+          // param=value (sin comillas)
+          for (const match of argsStr.matchAll(/(\w+)\s*=\s*([^,\s"']+)/g)) {
+            if (!args[match[1]]) args[match[1]] = match[2];
+          }
+        }
+        return args;
+      }
+      async chat(userMsg, onTool, onStream) {
+        if (!this.isReady) throw new Error("Not ready");
+        const start = performance.now();
+        let tokenCount = 0;
+        
+        // System prompt con instrucciones de tools
+        const systemPrompt = this.buildSystemPrompt();
+        
+        // Construir mensajes
+        const messages = [
+          { role: 'system', content: systemPrompt },
+          ...this.conversationHistory,
+          { role: 'user', content: userMsg }
+        ];
+        this.addToHistory('user', userMsg);
+        
+        // Primera generación
+        const input = this.tokenizer.apply_chat_template(messages, { add_generation_prompt: true, return_dict: true });
+        let generated = '';
+        let isToolCall = false;
+        
+        const streamer = new TextStreamer(this.tokenizer, {
+          skip_prompt: true,
+          skip_special_tokens: false,
+          callback_function: token => {
+            tokenCount++;
+            generated += token;
+            if (generated.includes('<|tool_call_start|>')) isToolCall = true;
+            if (!isToolCall) {
+              const clean = token.replace(/<\|[^|]+\|>/g, '').replace(/\[[\w]+\([^\)]*\)\]/g, '');
+              if (clean.trim()) onStream(clean);
+            }
+          }
+        });
+        
+        await this.model.generate({
+          ...input,
+          max_new_tokens: 512,
+          do_sample: false,
+          repetition_penalty: 1.05,
+          streamer
+        });
+        
+        // Verificar si hay tool call
+        const tool = this.parseToolCall(generated);
+        
+        if (tool) {
+          onTool(tool.name, tool.arguments);
+          const result = await Promise.resolve(toolExecutors[tool.name](tool.arguments));
+          
+          // Construir mensajes con resultado de tool
+          const argsStr = Object.entries(tool.arguments).map(([k, v]) => `${k}="${v}"`).join(',');
+          const messagesWithTool = [
+            ...messages,
+            { role: 'assistant', content: `<|tool_call_start|>[${tool.name}(${argsStr})]<|tool_call_end|>` },
+            { role: 'tool', content: typeof result === 'string' ? result : JSON.stringify(result) }
+          ];
+          
+          // Segunda generación con resultado
+          const input2 = this.tokenizer.apply_chat_template(messagesWithTool, { add_generation_prompt: true, return_dict: true });
+          let finalResponse = '';
+          
+          await this.model.generate({
+            ...input2,
+            max_new_tokens: 300,
+            do_sample: false,
+            repetition_penalty: 1.05,
+            streamer: new TextStreamer(this.tokenizer, {
+              skip_prompt: true,
+              skip_special_tokens: true,
+              callback_function: token => {
+                tokenCount++;
+                finalResponse += token;
+                const clean = token.replace(/<\|[^|]+\|>/g, '');
+                if (clean.trim()) onStream(clean);
+              }
+            })
+          });
+          
+          this.addToHistory('assistant', this.cleanResponse(finalResponse));
+          return this.buildResult(finalResponse, tool, result, tokenCount, start);
+        }
+        
+        // Sin tool call
+        const cleanResponse = this.cleanResponse(generated);
+        this.addToHistory('assistant', cleanResponse);
+        return this.buildResult(cleanResponse, null, null, tokenCount, start);
+      }
+      
+      buildSystemPrompt() {
+        let prompt = `You are a helpful AI assistant. Respond in Spanish.
+
+IMPORTANT: You do NOT have access to real-time information. You MUST use tools to get current data.
+
+MANDATORY TOOL USAGE:
+- For ANY question about current date, time, day, or "what time is it": You MUST call get_current_date() - DO NOT guess or make up dates
+- For ANY math calculation: You MUST call calculator(expression="...")
+- For weather questions: You MUST call get_weather(city="...")  
+- For questions about user's experience, skills, projects: You MUST call search_profile(query="...")
+
+When you need to use a tool, output ONLY the tool call in this exact format:
+<|tool_call_start|>[function_name(param="value")]<|tool_call_end|>
+
+Example for date/time questions:
+<|tool_call_start|>[get_current_date()]<|tool_call_end|>
+
+DO NOT make up or guess dates, times, or any factual information. If you need current information, USE THE TOOLS.
+
+List of tools: ${JSON.stringify(TOOLS)}`;
+        
+        if (this.conversationSummary) {
+          prompt += `\n\nContext:\n${this.conversationSummary}`;
+        }
+        return prompt;
+      }
+      
+      cleanResponse(text) {
+        return text.replace(/<\|[^|]+\|>/g, '').replace(/\[[\w]+\([^\)]*\)\]/g, '').trim();
+      }
+      
+      buildResult(response, tool, toolResult, tokenCount, startTime) {
+        const tokensPerSec = (tokenCount / ((performance.now() - startTime) / 1000)).toFixed(1);
+        return {
+          response,
+          toolUsed: tool?.name || null,
+          toolArgs: tool?.arguments || null,
+          toolResult,
+          tokensPerSec,
+          memoryInfo: {
+            historyTokens: this.getHistoryTokenCount(),
+            maxTokens: this.maxContextTokens,
+            hasSummary: !!this.conversationSummary,
+            shouldSummarize: this.shouldSummarize()
+          }
+        };
+      }
+    }
+
+    const agent = new LFM2Agent();
+    const $ = id => document.getElementById(id);
+    let isProcessing = false;
+    let currentModel = 'onnx-community/LFM2-1.2B-Tool-ONNX';
+
+    // ==================== UI Helpers ====================
+    
+    function updateMemory(status) {
+      const tokens = agent.isReady ? agent.getHistoryTokenCount() : 0;
+      $('memory-status-text').textContent = status === 'summarizing' 
+        ? '📝 Resumiendo...' 
+        : `${tokens}/${agent.maxContextTokens} tok`;
+      $('view-summary-btn').style.display = agent.conversationSummary ? '' : 'none';
+    }
+    
+    function setStatus(elementId, state, text) {
+      const dot = $(elementId);
+      dot.classList.remove('loading', 'ready', 'error');
+      if (state) dot.classList.add(state);
+      if (text) $(`${elementId}-text`).textContent = text;
+    }
+    
+    function setInputEnabled(enabled) {
+      $('user-input').disabled = !enabled;
+      $('send-btn').disabled = !enabled;
+      if (enabled) $('user-input').focus();
+    }
+    
+    function scrollToBottom() {
+      $('chat-messages').scrollTop = $('chat-messages').scrollHeight;
+    }
+    
+    function createMessage(role, content) {
+      const div = document.createElement('div');
+      div.className = `message ${role}`;
+      div.innerHTML = content;
+      $('chat-messages').appendChild(div);
+      scrollToBottom();
+      return div;
+    }
+    
+    function formatMarkdown(text) {
+      return text
+        .replace(/<\|[^|]+\|>/g, '')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/`(.*?)`/g, '<code>$1</code>')
+        .replace(/\n/g, '<br>')
+        .trim();
+    }
+
+    // ==================== Initialization ====================
+    
+    async function init() {
+      // Check WebGPU
+      if (navigator.gpu) {
+        try {
+          if (await navigator.gpu.requestAdapter()) {
+            setStatus('webgpu-status', 'ready', 'WebGPU: ✓');
+          }
+        } catch {}
+      } else {
+        setStatus('webgpu-status', 'error', 'WebGPU: No');
+        $('inference-badge').textContent = 'WASM';
+      }
+      
+      setStatus('model-status', 'loading');
+      setStatus('rag-status', 'loading');
+      
+      try {
+        // Initialize LFM2 model
+        const backend = await agent.initialize(currentModel, p => {
+          $('progress-fill').style.width = `${p.progress * 50}%`;
+          $('progress-text').textContent = p.text;
+          $('model-status-text').textContent = p.text;
+        });
+        
+        setStatus('model-status', 'ready', 'LFM2 ✓');
+        $('backend-text').textContent = backend === 'webgpu' ? 'WebGPU' : 'WASM';
+        $('inference-badge').textContent = backend === 'webgpu' ? '⚡ WebGPU' : 'WASM';
+        
+        // Initialize RAG
+        if (!vectorStore.isReady) {
+          await vectorStore.initialize(p => {
+            $('rag-status-text').textContent = p.text;
+            if (p.progress) $('progress-fill').style.width = `${50 + p.progress * 25}%`;
+          });
+          await vectorStore.addDocuments(PERSONAL_KNOWLEDGE_BASE, p => {
+            $('rag-status-text').textContent = p.text;
+            $('progress-fill').style.width = `${75 + p.progress * 25}%`;
+          });
+        }
+        
+        setStatus('rag-status', 'ready', 'RAG ✓');
+        $('progress-fill').style.width = '100%';
+        $('progress-text').textContent = 'Listo';
+        setInputEnabled(true);
+        
+      } catch (e) {
+        setStatus('model-status', 'error', 'Error');
+        setStatus('rag-status', 'error');
+        $('progress-text').textContent = e.message;
+        console.error(e);
+      }
+    }
+
+    // ==================== Model Selector ====================
+    
+    $('model-selector').addEventListener('change', async e => {
+      currentModel = e.target.value;
+      agent.isReady = false;
+      agent.model = null;
+      agent.tokenizer = null;
+      agent.clearHistory();
+      
+      $('chat-messages').innerHTML = '';
+      $('welcome-screen').style.display = 'flex';
+      $('chat-messages').appendChild($('welcome-screen'));
+      updateMemory();
+      
+      setStatus('model-status', 'loading');
+      setInputEnabled(false);
+      
+      try {
+        const backend = await agent.initialize(currentModel, p => {
+          $('progress-fill').style.width = `${p.progress * 100}%`;
+          $('progress-text').textContent = p.text;
+        });
+        setStatus('model-status', 'ready', 'Listo ✓');
+        $('backend-text').textContent = backend === 'webgpu' ? 'WebGPU' : 'WASM';
+        setInputEnabled(true);
+      } catch (e) {
+        setStatus('model-status', 'error');
+        console.error(e);
+      }
+    });
+
+    // ==================== Chat ====================
+    
+    async function send() {
+      const msg = $('user-input').value.trim();
+      if (!msg || isProcessing || !agent.isReady) return;
+      
+      isProcessing = true;
+      $('send-btn').disabled = true;
+      $('user-input').value = '';
+      $('welcome-screen').style.display = 'none';
+      
+      // User message
+      createMessage('user', `
+        <div class="message-content">${formatMarkdown(msg)}</div>
+        <div class="message-meta">${new Date().toLocaleTimeString('es-ES')}</div>
+      `);
+      
+      // Thinking indicator
+      const thinking = createMessage('assistant', `
+        <div class="thinking-indicator">
+          <div class="thinking-wave"><span></span><span></span><span></span><span></span></div>
+          <span style="color:var(--text-secondary)">Procesando...</span>
+        </div>
+      `);
+      thinking.id = 'thinking';
+      
+      let assistantDiv = null;
+      let streamContent = '';
+      
+      try {
+        const result = await agent.chat(
+          msg,
+          // onTool callback
+          (toolName, toolArgs) => {
+            $('thinking')?.remove();
+            assistantDiv = createMessage('assistant', `
+              <div class="tool-execution">
+                <div class="tool-execution-header">⚡ ${toolName}</div>
+                <div class="tool-execution-body">${JSON.stringify(toolArgs, null, 2)}</div>
+              </div>
+              <div class="message-content"></div>
+            `);
+          },
+          // onStream callback
+          (chunk) => {
+            if (!assistantDiv) {
+              $('thinking')?.remove();
+              assistantDiv = createMessage('assistant', '<div class="message-content"></div>');
+            }
+            streamContent += chunk;
+            assistantDiv.querySelector('.message-content').innerHTML = formatMarkdown(streamContent);
+            scrollToBottom();
+          }
+        );
+        
+        // Add tool result if used
+        if (result.toolUsed && assistantDiv) {
+          const toolExec = assistantDiv.querySelector('.tool-execution');
+          if (toolExec) {
+            const resultDiv = document.createElement('div');
+            resultDiv.className = 'tool-result';
+            resultDiv.textContent = `✓ ${result.toolResult}`;
+            toolExec.appendChild(resultDiv);
+          }
+        }
+        
+        // Add metadata
+        if (assistantDiv) {
+          const meta = document.createElement('div');
+          meta.className = 'message-meta';
+          meta.innerHTML = `${new Date().toLocaleTimeString('es-ES')} ${
+            result.tokensPerSec ? `<span class="speed">• ${result.tokensPerSec} tok/s</span>` : ''
+          }`;
+          assistantDiv.appendChild(meta);
+        }
+        
+        // Check if summarization needed
+        if (result.memoryInfo?.shouldSummarize) {
+          updateMemory('summarizing');
+          await agent.summarizeConversation();
+        }
+        updateMemory();
+        
+      } catch (e) {
+        $('thinking')?.remove();
+        createMessage('assistant', `
+          <div class="message-content" style="border-color:var(--error)">Error: ${e.message}</div>
+        `);
+        console.error(e);
+      }
+      
+      isProcessing = false;
+      $('send-btn').disabled = false;
+      $('user-input').focus();
+      updateMemory();
+    }
+
+    // ==================== Event Listeners ====================
+    
+    $('send-btn').addEventListener('click', send);
+    
+    $('clear-chat-btn').addEventListener('click', () => {
+      agent.clearHistory();
+      $('chat-messages').innerHTML = '';
+      $('welcome-screen').style.display = 'flex';
+      $('chat-messages').appendChild($('welcome-screen'));
+      updateMemory();
+      $('user-input').focus();
+    });
+    
+    $('view-summary-btn').addEventListener('click', () => {
+      if (agent.conversationSummary) {
+        createMessage('assistant', `
+          <div class="tool-execution" style="border-color:var(--accent-secondary)">
+            <div class="tool-execution-header" style="color:var(--accent-secondary)">📝 Resumen</div>
+            <div class="tool-execution-body">${agent.conversationSummary}</div>
+          </div>
+        `);
+      }
+    });
+    
+    $('user-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        send();
+      }
+    });
+    
+    $('user-input').addEventListener('input', () => {
+      $('user-input').style.height = 'auto';
+      $('user-input').style.height = Math.min($('user-input').scrollHeight, 120) + 'px';
+    });
+    
+    window.useExample = el => {
+      if (agent.isReady) {
+        $('user-input').value = el.textContent;
+        $('user-input').focus();
+      }
+    };
+    
+    // Start
+    init();
+  </script>
+</body>
+</html>
